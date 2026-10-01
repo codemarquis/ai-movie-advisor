@@ -1,14 +1,38 @@
 [project]
 name = "ai-movie-advisor"
-version = "0.1.0"
-description = "Streamlit movie recommender with PostgreSQL and collaborative filtering"
+version = "0.2.0"
+description = "AI Movie Advisor: Streamlit movie discovery and recommendations on PostgreSQL"
 requires-python = ">=3.11"
 dependencies = [
+    "certifi>=2024.8.30",
     "pandas>=2.2.3",
     "plotly>=6.0.0",
-    "psycopg2-binary>=2.9.10",
+    "psycopg[binary]>=3.2",
+    "python-dotenv>=1.0.1",
     "scikit-learn>=1.6.1",
     "sqlalchemy>=2.0.38",
     "streamlit>=1.42.0",
     "tmdbv3api>=1.9.0",
 ]
+
+[project.optional-dependencies]
+dev = [
+    "pip-audit>=2.7",
+    "pytest>=8.3",
+    "ruff>=0.8",
+]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "S", "UP"]
+ignore = ["S101"]  # assert is fine in tests
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["integration: needs a PostgreSQL DATABASE_URL"]
