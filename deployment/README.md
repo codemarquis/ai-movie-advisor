@@ -1,75 +1,84 @@
-# Deployment Instructions
+# Deploying AI Movie Advisor on AWS EC2
 
-## Local Development
-1. Clone the repository
-2. Install dependencies:
+One Ubuntu instance runs Nginx and the Streamlit app (kept alive by Supervisor). PostgreSQL runs on Amazon RDS (recommended) or on the same instance.
+
+```
+Internet ──HTTPS──▶ Nginx :443 ──▶ Streamlit 127.0.0.1:8501 ──read-only──▶ PostgreSQL
+                    (TLS, rate limit,     (Supervisor,            (ama_app role)
+                     security headers)     unprivileged user)
+```
+
+## 1. Launch the instance
+
+- Ubuntu Server 22.04 or 24.04 LTS, t3.small or larger
+- Security group inbound rules:
+  - **22** from **your IP only**
+  - **80** and **443** from anywhere
+- **Do not** open 8501. Streamlit listens on 127.0.0.1 and is reached only through Nginx.
+
+For RDS: put the database in private subnets, allow **5432 only from the instance's security group**, and use `?sslmode=require` in both database URLs.
+
+## 2. Install
+
 ```bash
-pip install -r requirements.txt
+ssh ubuntu@<instance>
+git clone https://github.com/codemarquis/ai-movie-advisor.git
+cd ai-movie-advisor
+./deployment/setup_ec2.sh                       # add INSTALL_LOCAL_POSTGRES=1 for a single-box setup
 ```
-3. Set up environment variables in `.env`:
-```
-DATABASE_URL=postgresql://user:password@localhost:5432/moviedb
-TMDB_API_KEY=your_tmdb_api_key
-```
-4. Initialize the database:
+
+The script stops on the first error and refuses to run as root. It:
+- installs Nginx, Supervisor and a Python virtualenv
+- creates `.env` from `.env.example` with `chmod 600`
+- installs the Nginx site and the Supervisor program for this checkout's path and user
+
+## 3. Database roles (least privilege)
+
 ```bash
-python scripts/init_db.py
+psql "postgresql://<master-user>@<host>/moviedb?sslmode=require" \
+  -v app_password='<strong-password-1>' -v admin_password='<strong-password-2>' \
+  -f deployment/db_roles.sql
 ```
-5. Run the application:
+
+| Role | Used by | Can do |
+|---|---|---|
+| `movie_admin` | `ADMIN_DATABASE_URL`: seeding, imports, poster refresh | Create and write tables |
+| `ama_app` | `DATABASE_URL`: the web app | `SELECT` only; every transaction read-only |
+
+## 4. Configure and seed
+
 ```bash
-streamlit run app.py
+nano .env
+#   DATABASE_URL=postgresql://ama_app:<pw1>@<host>:5432/moviedb?sslmode=require
+#   ADMIN_DATABASE_URL=postgresql://movie_admin:<pw2>@<host>:5432/moviedb?sslmode=require
+#   TMDB_API_KEY=            # optional
+
+.venv/bin/python scripts/init_db.py             # safe to re-run
+sudo supervisorctl restart ai-movie-advisor
 ```
 
-## EC2 Deployment
+## 5. Domain and TLS
 
-### 1. Launch EC2 Instance
-- Use Ubuntu Server 22.04 LTS
-- t2.small or larger recommended
-- Configure security group to allow ports 22, 80, 443, and 5000
-
-### 2. Initial Setup
-1. SSH into your instance
-2. Clone the repository
-3. Run the setup script:
 ```bash
-chmod +x deployment/setup_ec2.sh
-./deployment/setup_ec2.sh
+sudo sed -i 's/your_domain.com/movies.example.com/' /etc/nginx/sites-available/ai-movie-advisor
+sudo nginx -t && sudo systemctl reload nginx
+sudo apt-get install -y certbot python3-certbot-nginx
+sudo certbot --nginx -d movies.example.com
 ```
 
-### 3. Configure Environment
-1. Create `.env` file with your environment variables
-2. Update `deployment/nginx.conf` with your domain name
-3. Initialize the database:
-```bash
-python scripts/init_db.py
-```
+Then uncomment the `Strict-Transport-Security` header in the Nginx site and reload.
 
-### 4. Load Balancer Setup
-The Nginx configuration in `deployment/nginx.conf` includes load balancer settings.
-To add more servers:
+## Operations
 
-1. Update the upstream block in nginx.conf:
-```nginx
-upstream streamlit_app {
-    server 127.0.0.1:5000;
-    server 127.0.0.1:5001;  # Add more servers as needed
-}
-```
+| Task | Command |
+|---|---|
+| App status | `sudo supervisorctl status ai-movie-advisor` |
+| App logs | `tail -f /var/log/supervisor/ai-movie-advisor.err.log` |
+| Nginx logs | `tail -f /var/log/nginx/access.log /var/log/nginx/error.log` |
+| Update | `git pull && .venv/bin/pip install -r requirements.txt && sudo supervisorctl restart ai-movie-advisor` |
+| Refresh posters | `.venv/bin/python scripts/update_posters.py` |
+| Backup data | `.venv/bin/python scripts/export_db.py --out ~/backups/$(date +%F)` |
 
-2. Update Supervisor configuration to run multiple Streamlit instances on different ports.
+## Scaling out
 
-### 5. SSL Configuration (Optional)
-```bash
-sudo apt install certbot python3-certbot-nginx -y
-sudo certbot --nginx -d your_domain.com
-```
-
-### 6. Monitoring
-- Check application logs:
-```bash
-tail -f /var/log/supervisor/streamlit.out.log
-```
-- Monitor Nginx access:
-```bash
-tail -f /var/log/nginx/access.log
-```
+Run more instances from the same AMI behind an **Application Load Balancer**, with sticky sessions (Streamlit keeps per-session state over a WebSocket). They all share the RDS database. Since the app only reads, an RDS read replica can take the `DATABASE_URL` traffic.
