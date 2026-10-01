@@ -1,36 +1,19 @@
 import streamlit as st
-import plotly.graph_objects as go
 
-def display_movie_card(movie):
-    col1, col2 = st.columns([1, 2])
+from components.safe import escape_markdown, safe_poster
+from models.domain import Movie, RatingStats
 
-    with col1:
-        st.image(movie.poster_url, use_container_width=True)
 
-    with col2:
-        st.header(movie.title)
-        st.write(f"**Genre:** {movie.genre}")
-        st.write(f"**Year:** {movie.year}")
-        st.write(f"**Rating:** {movie.rating:.1f}/5.0")
-        st.write(f"**Votes:** {movie.votes:,}")
-
-        # Add rating input
-        user_rating = st.slider(
-            "Rate this movie",
-            1.0, 5.0, 3.0, 0.5,
-            key=f"rating_{movie.id}"
-        )
-
-def plot_rating_distribution(ratings):
-    fig = go.Figure(data=[
-        go.Histogram(x=ratings, nbinsx=10)
-    ])
-
-    fig.update_layout(
-        title="Rating Distribution",
-        xaxis_title="Rating",
-        yaxis_title="Count",
-        showlegend=False
-    )
-
-    st.plotly_chart(fig, use_container_width=True)
+def render_details(movie: Movie, stats: RatingStats, similar: list[Movie]) -> None:
+    poster_col, info_col = st.columns([1, 2])
+    poster_col.image(safe_poster(movie.poster_url), width="stretch")
+    with info_col:
+        st.markdown(f"### {escape_markdown(movie.title)} ({movie.year})")
+        st.markdown(f"🎭 {escape_markdown(movie.genre)}")
+        rating_col, votes_col = st.columns(2)
+        rating_col.metric("Rating", f"{movie.rating:.1f} / 5")
+        votes_col.metric("User ratings", f"{stats.count:,}")
+        if similar:
+            st.markdown("**People who liked this also liked**")
+            for other in similar:
+                st.markdown(f"- {escape_markdown(other.title)} ({other.year}) · ⭐ {other.rating:.1f}")

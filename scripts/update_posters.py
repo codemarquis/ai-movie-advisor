@@ -1,26 +1,13 @@
 """
-Refresh poster URLs for every movie already in the database.
+Re-resolve poster URLs for every movie already in the database.
 
-Use this on an existing database instead of re-seeding:
+Use this on an existing database instead of reseeding:
     python scripts/update_posters.py
 """
-import sys
-import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import _bootstrap  # noqa: F401
 
-from models.database import Movie, get_session
+from repositories import movie_repository as repo
 from services.posters import poster_url_for
 
-
-def update_posters():
-    session = get_session()
-    movies = session.query(Movie).all()
-    for movie in movies:
-        movie.poster_url = poster_url_for(movie.title)
-    session.commit()
-    session.close()
-    print(f"Updated posters for {len(movies)} movies")
-
-
 if __name__ == "__main__":
-    update_posters()
+    print(f"Updated posters for {repo.update_poster_urls(poster_url_for)} movies.")

@@ -1,73 +1,47 @@
 import streamlit as st
 
-def render_sidebar(genres):
+from models.domain import MovieFilters
+
+
+def render_sidebar(genres: list[str], year_bounds: tuple[int, int]) -> MovieFilters:
     st.sidebar.title("Movie Filters")
 
-    # Extended genre list
-    all_genres = [
-        "Action", "Adventure", "Animation", "Comedy", "Crime", 
-        "Documentary", "Drama", "Family", "Fantasy", "Film-Noir",
-        "Horror", "Musical", "Mystery", "Romance", "Sci-Fi",
-        "Thriller", "War", "Western"
-    ]
-
-    # Genre checkboxes
     st.sidebar.subheader("Genres")
-    select_all = st.sidebar.checkbox("Select All Genres")
-
-    selected_genres = []
+    select_all = st.sidebar.checkbox("Select all genres", key="genre_all")
+    selected: list[str] = []
     if select_all:
-        selected_genres = all_genres
+        selected = list(genres)
     else:
-        # Create two columns for genres
-        col1, col2 = st.sidebar.columns(2)
+        left, right = st.sidebar.columns(2)
+        half = (len(genres) + 1) // 2
+        for column, chunk in ((left, genres[:half]), (right, genres[half:])):
+            with column:
+                selected += [g for g in chunk if st.checkbox(g, key=f"genre_{g}")]
 
-        # Split genres between columns
-        half = len(all_genres) // 2
-        with col1:
-            for genre in all_genres[:half]:
-                if st.checkbox(genre, key=f"genre_{genre}"):
-                    selected_genres.append(genre)
-
-        with col2:
-            for genre in all_genres[half:]:
-                if st.checkbox(genre, key=f"genre_{genre}"):
-                    selected_genres.append(genre)
-
-    # Mood slider
+    st.sidebar.subheader("Mood & pace")
+    match_mood = st.sidebar.toggle(
+        "Match my mood & pace",
+        key="match_mood",
+        help="Keeps genres whose typical mood and pace are close to your choice.",
+    )
     mood = st.sidebar.slider(
-        "Mood",
-        min_value=1,
-        max_value=5,
-        value=3,
-        help="1: Light & Fun → 5: Dark & Serious"
+        "Mood", 1, 5, 3, disabled=not match_mood, help="1: Light & fun → 5: Dark & serious"
     )
-
-    # Pace slider
     pace = st.sidebar.slider(
-        "Pace",
-        min_value=1,
-        max_value=5,
-        value=3,
-        help="1: Slow & Thoughtful → 5: Fast & Action-packed"
+        "Pace", 1, 5, 3, disabled=not match_mood, help="1: Slow & thoughtful → 5: Fast & action-packed"
     )
 
-    # Year range filter
-    year_range = st.sidebar.slider(
-        "Select Year Range",
-        1990, 2023, (1990, 2023)
-    )
+    low, high = year_bounds
+    if low >= high:
+        high = low + 1
+    year_range = st.sidebar.slider("Year range", low, high, (low, high))
+    min_rating = st.sidebar.slider("Minimum rating", 0.0, 5.0, 0.0, 0.5)
 
-    # Rating filter
-    min_rating = st.sidebar.slider(
-        "Minimum Rating",
-        1.0, 5.0, 3.0, 0.5
+    return MovieFilters(
+        genres=tuple(selected),
+        year_range=year_range,
+        min_rating=min_rating,
+        match_mood=match_mood,
+        mood=mood,
+        pace=pace,
     )
-
-    return {
-        "genres": selected_genres,
-        "mood": mood,
-        "pace": pace,
-        "year_range": year_range,
-        "min_rating": min_rating
-    }

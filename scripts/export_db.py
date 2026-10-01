@@ -1,42 +1,44 @@
 """
-Script to export database schema and data for migration
+Export the schema (DDL) and data (JSON) of the app's tables.
+
+    python scripts/export_db.py [--out export]
+
+Writes <out>/schema.sql and <out>/data.json (the default ./export is gitignored).
+Only the tables defined by the app are exported; nothing else is reflected.
 """
-import sys
-import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from sqlalchemy import create_engine, MetaData
-from models.database import Base
+import argparse
 import json
+from pathlib import Path
 
-def export_schema():
-    """Export database schema as SQL"""
-    engine = create_engine(os.getenv('DATABASE_URL'))
-    
-    # Create schema.sql
-    with open('schema.sql', 'w') as f:
-        for table in Base.metadata.sorted_tables:
-            f.write(str(table.compile(engine)) + ';\n\n')
+import _bootstrap  # noqa: F401
+from sqlalchemy.schema import CreateTable
 
-def export_data():
-    """Export table data as JSON for easy import"""
-    engine = create_engine(os.getenv('DATABASE_URL'))
-    metadata = MetaData()
-    metadata.reflect(bind=engine)
-    
+from models.database import Base, get_engine
+
+
+def export(out_dir: Path) -> None:
+    engine = get_engine(read_only=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    ddl = "".join(f"{CreateTable(t).compile(dialect=engine.dialect)};\n\n" for t in Base.metadata.sorted_tables)
+    (out_dir / "schema.sql").write_text(ddl)
+
     data = {}
-    for table in metadata.sorted_tables:
-        result = engine.execute(table.select())
-        data[table.name] = [dict(row) for row in result]
-    
-    with open('data.json', 'w') as f:
-        json.dump(data, f, indent=2)
+    with engine.connect() as conn:
+        for table in Base.metadata.sorted_tables:
+            rows = conn.execute(table.select().order_by(*table.primary_key.columns)).mappings()
+            data[table.name] = [dict(row) for row in rows]
+    (out_dir / "data.json").write_text(json.dumps(data, indent=2, default=str))
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--out", default="export", type=Path, help="output directory (default: ./export)")
+    args = parser.parse_args(argv)
+    export(args.out)
+    print(f"Exported schema.sql and data.json to {args.out}/")
+    return 0
+
 
 if __name__ == "__main__":
-    print("Exporting database schema...")
-    export_schema()
-    print("Schema exported to schema.sql")
-    
-    print("Exporting data...")
-    export_data()
-    print("Data exported to data.json")
+    raise SystemExit(main())

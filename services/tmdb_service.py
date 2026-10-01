@@ -1,69 +1,52 @@
-from tmdbv3api import TMDb, Movie, Discover
-import os
-from typing import List, Dict, Optional
-import streamlit as st
+"""
+Thin TMDB client for live catalogue data (popular, search, genres).
+
+Not yet used by the UI (see README roadmap). It has no Streamlit dependency;
+callers decide how to cache and how to show errors.
+"""
+import logging
+
+from tmdbv3api import Discover, Movie, TMDb
+
+from config import tmdb_api_key
+
+log = logging.getLogger(__name__)
+
+IMAGE_BASE = "https://image.tmdb.org/t/p/w500"
+
 
 class TMDBService:
-    def __init__(self):
-        self.tmdb = TMDb()
-        self.tmdb.api_key = os.getenv('TMDB_API_KEY')
-        self.movie = Movie()
-        self.discover = Discover()
-        self.base_image_url = "https://image.tmdb.org/t/p/w500"
+    def __init__(self) -> None:
+        key = tmdb_api_key()
+        if not key:
+            raise RuntimeError("TMDB_API_KEY is not set")
+        TMDb().api_key = key
+        self._movie = Movie()
+        self._discover = Discover()
 
-    @st.cache_data(ttl=3600)
-    def get_popular_movies(self, page: int = 1) -> List[Dict]:
-        """Fetch popular movies with caching"""
-        try:
-            movies = self.movie.popular(page=page)
-            return [self._format_movie_data(movie) for movie in movies]
-        except Exception as e:
-            st.error(f"Error fetching popular movies: {str(e)}")
-            return []
+    def popular_movies(self, page: int = 1) -> list[dict]:
+        return [self._format(m) for m in self._movie.popular(page=page)]
 
-    @st.cache_data(ttl=3600)
-    def search_movies(self, query: str) -> List[Dict]:
-        """Search movies by title with caching"""
-        try:
-            movies = self.movie.search(query)
-            return [self._format_movie_data(movie) for movie in movies]
-        except Exception as e:
-            st.error(f"Error searching movies: {str(e)}")
-            return []
+    def search_movies(self, query: str) -> list[dict]:
+        return [self._format(m) for m in self._movie.search(query[:100])]
 
-    @st.cache_data(ttl=3600)
-    def get_movies_by_genre(self, genre_id: int, page: int = 1) -> List[Dict]:
-        """Get movies by genre with caching"""
-        try:
-            movies = self.discover.discover_movies({
-                'with_genres': genre_id,
-                'page': page
-            })
-            return [self._format_movie_data(movie) for movie in movies]
-        except Exception as e:
-            st.error(f"Error fetching movies by genre: {str(e)}")
-            return []
+    def movies_by_genre(self, genre_id: int, page: int = 1) -> list[dict]:
+        return [self._format(m) for m in self._discover.discover_movies({"with_genres": genre_id, "page": page})]
 
-    def _format_movie_data(self, movie) -> Dict:
-        """Format TMDB movie data into our application format"""
+    def genres(self) -> list[dict]:
+        return [{"id": g.id, "name": g.name} for g in self._movie.genres()]
+
+    @staticmethod
+    def _format(movie) -> dict:
+        release = getattr(movie, "release_date", "") or ""
+        poster = getattr(movie, "poster_path", None)
         return {
-            'id': movie.id,
-            'title': movie.title,
-            'genre_ids': getattr(movie, 'genre_ids', []),
-            'year': movie.release_date[:4] if hasattr(movie, 'release_date') and movie.release_date else None,
-            'rating': getattr(movie, 'vote_average', 0.0),
-            'votes': getattr(movie, 'vote_count', 0),
-            'poster_url': f"{self.base_image_url}{movie.poster_path}" if movie.poster_path else f"https://placehold.co/300x450/darkgray/white?text={movie.title.replace(' ', '+')}",
-            'overview': getattr(movie, 'overview', ''),
-            'popularity': getattr(movie, 'popularity', 0.0)
+            "id": movie.id,
+            "title": movie.title,
+            "genre_ids": getattr(movie, "genre_ids", []),
+            "year": int(release[:4]) if release[:4].isdigit() else None,
+            "rating": getattr(movie, "vote_average", 0.0),
+            "votes": getattr(movie, "vote_count", 0),
+            "poster_url": f"{IMAGE_BASE}{poster}" if isinstance(poster, str) and poster.startswith("/") else None,
+            "overview": getattr(movie, "overview", ""),
         }
-
-    @st.cache_data(ttl=3600)
-    def get_genre_list(self) -> List[Dict]:
-        """Get list of movie genres"""
-        try:
-            genres = self.movie.genres()
-            return [{'id': genre.id, 'name': genre.name} for genre in genres]
-        except Exception as e:
-            st.error(f"Error fetching genres: {str(e)}")
-            return []

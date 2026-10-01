@@ -1,77 +1,109 @@
+"""
+AI Movie Advisor: Streamlit entry point.
+
+A thin controller: it asks the repository and services for data and hands
+the results to UI components. No SQL lives here.
+"""
+import logging
+
 import streamlit as st
-from models.database import init_db, Movie, get_session
-from models.recommender import MovieRecommender
+
+from components.movie_details import render_details
+from components.movie_tiles import TILE_CSS, display_movie_tiles
 from components.sidebar import render_sidebar
-from components.movie_tiles import display_movie_tiles, display_watchlist
-from utils.data_processing import filter_movies, search_movies, get_movie_rating_stats
+from config import ConfigError
+from repositories import movie_repository as repo
+from services.recommender import MovieRecommender
 
-# Initialize database if not exists
-init_db()
+log = logging.getLogger("ai_movie_advisor")
 
-# Page config
-st.set_page_config(
-    page_title="AI Movie Recommender",
-    page_icon="🎬",
-    layout="wide"
-)
+st.set_page_config(page_title="AI Movie Advisor", page_icon="🎬", layout="wide")
 
-# Initialize session state
-if 'recommender' not in st.session_state:
-    st.session_state.recommender = MovieRecommender()
 
-# Get unique genres and create movies dictionary
-session = get_session()
-genres = [g[0] for g in session.query(Movie.genre).distinct()]
-movies_dict = {movie.id: movie for movie in session.query(Movie).all()}
-session.close()
+@st.cache_resource(ttl=3600)
+def get_recommender() -> MovieRecommender:
+    return MovieRecommender(repo.ratings_frame())
 
-# Main layout
-st.title("🎬 AI Movie Recommender")
 
-# Sidebar filters
-filters = render_sidebar(genres)
+@st.cache_data(ttl=300)
+def load_genres() -> list[str]:
+    return repo.list_genres()
 
-# Main content tabs
-tab1, tab2, tab3 = st.tabs(["Movies", "AI Recommendations", "Watchlist"])
 
-with tab1:
-    # Search box
-    search_term = st.text_input("🔍 Search for movies", "")
+@st.cache_data(ttl=300)
+def load_year_bounds() -> tuple[int, int]:
+    return repo.year_bounds()
 
-    if search_term:
-        results = search_movies(search_term)
-        if results:
-            st.subheader("Search Results")
-            display_movie_tiles(results, section_prefix="search")
-        else:
-            st.warning("No movies found matching your search.")
+
+@st.dialog("Movie details", width="large")
+def show_details(movie_id: int) -> None:
+    movies = repo.get_movies([movie_id])
+    if not movies:
+        st.warning("This movie is no longer available.")
+        return
+    similar = repo.get_movies(get_recommender().similar_to(movie_id, n=5))
+    render_details(movies[0], repo.rating_stats(movie_id), similar)
+
+
+def tiles_or_message(movies, section: str, watchlist: set[int], empty_message: str) -> None:
+    if movies:
+        display_movie_tiles(movies, section, watchlist)
     else:
-        # Display filtered movies
-        filtered_movies = filter_movies(filters)
-        if filtered_movies:
-            display_movie_tiles(filtered_movies, section_prefix="browse")
+        st.info(empty_message)
+
+
+def main() -> None:
+    try:
+        genres, year_bounds = load_genres(), load_year_bounds()
+    except ConfigError as exc:
+        st.error(str(exc))
+        st.stop()
+    except Exception:
+        # Full details go to the server log; users get a generic message.
+        log.exception("Database unavailable")
+        st.error("The movie database is unavailable right now. Please try again shortly.")
+        st.stop()
+
+    watchlist: set[int] = st.session_state.setdefault("watchlist", set())
+    st.markdown(TILE_CSS, unsafe_allow_html=True)  # static, trusted CSS only
+    st.title("🎬 AI Movie Advisor")
+
+    filters = render_sidebar(genres, year_bounds)
+    browse_tab, recommend_tab, watchlist_tab = st.tabs(["Movies", "AI Recommendations", "Watchlist"])
+
+    with browse_tab:
+        term = st.text_input("🔍 Search by title", max_chars=repo.MAX_SEARCH_LENGTH).strip()
+        if term:
+            st.subheader("Search results")
+            tiles_or_message(repo.search_movies(term), "search", watchlist, "No movies match that title.")
         else:
-            st.warning("No movies found matching your filters.")
+            tiles_or_message(repo.find_movies(filters), "browse", watchlist, "No movies match these filters.")
 
-with tab2:
-    st.subheader("AI Recommended Movies")
-    recommended_movies = []
-    if filters["genres"]:
-        for genre in filters["genres"]:
-            genre_recommendations = st.session_state.recommender.get_recommendations_by_genre(genre, n=2)
-            if genre_recommendations:
-                recommended_movies.extend(genre_recommendations)
-        if recommended_movies:
-            display_movie_tiles(recommended_movies, section_prefix="recommended")
-        else:
-            st.info("No recommendations found for the selected genres.")
-    else:
-        st.info("Please select at least one genre to get personalized recommendations.")
+    with recommend_tab:
+        if watchlist:
+            st.subheader("Because of your watchlist")
+            picks = repo.get_movies(get_recommender().recommend_for(watchlist, n=8))
+            tiles_or_message(picks, "rec_watch", watchlist, "No similar movies found yet.")
+        if filters.genres:
+            st.subheader("Top picks in your genres")
+            picks = [m for g in filters.genres for m in repo.top_rated_in_genre(g, limit=2)]
+            tiles_or_message(picks, "rec_genre", watchlist, "No movies in these genres yet.")
+        if not watchlist and not filters.genres:
+            st.info("Add movies to your watchlist, or pick genres in the sidebar, to get recommendations.")
 
-with tab3:
-    st.subheader("Your Watchlist")
-    display_watchlist(movies_dict)  # This function already uses "watchlist" as section prefix
+    with watchlist_tab:
+        st.subheader("Your Watchlist")
+        tiles_or_message(
+            repo.get_movies(sorted(watchlist)), "watchlist", watchlist,
+            "Your watchlist is empty. Use ➕ Watchlist on any movie to save it here.",
+        )
 
-# Footer
-st.markdown("---")
-st.markdown("Made with ❤️ by codemarquis")
+    details_id = st.session_state.pop("details_id", None)
+    if details_id is not None:
+        show_details(details_id)
+
+    st.markdown("---")
+    st.markdown("Made with ❤️ by codemarquis")
+
+
+main()

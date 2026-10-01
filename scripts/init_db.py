@@ -1,46 +1,54 @@
-import sys
-import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+"""
+Create the tables and seed the catalogue.
 
-from models.database import init_db, Movie, Rating, get_session
-from data.mock_movies import generate_mock_data
+Safe to run more than once: if movies already exist it does nothing.
+Pass --reset to drop and recreate every table first (destroys all data).
+Uses ADMIN_DATABASE_URL (falls back to DATABASE_URL).
+"""
+import argparse
+
+import _bootstrap  # noqa: F401
+
+from data.seed import build_catalog, generate_ratings
+from models.database import create_tables, drop_tables
+from repositories import movie_repository as repo
 from services.posters import poster_url_for
 
-def populate_database():
-    # Initialize database
-    init_db()
-    session = get_session()
 
-    # Generate mock data
-    movies_df, ratings_df = generate_mock_data()
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--reset", action="store_true", help="drop and recreate all tables first (destroys data)")
+    args = parser.parse_args(argv)
 
-    # Add movies
-    for _, row in movies_df.iterrows():
-        movie = Movie(
-            id=int(row['movie_id']),
-            title=str(row['title']),
-            genre=str(row['genre']),
-            year=int(row['year']),
-            rating=float(row['rating']),
-            votes=int(row['votes']),
-            poster_url=poster_url_for(str(row['title']))
-        )
-        session.add(movie)
+    if args.reset:
+        drop_tables()
+    create_tables()
 
-    # Commit movies first to establish foreign keys
-    session.commit()
+    existing = repo.movie_count()
+    if existing:
+        print(f"Database already has {existing} movies; nothing to do. Use --reset to reseed.")
+        return 0
 
-    # Add ratings
-    for _, row in ratings_df.iterrows():
-        rating = Rating(
-            user_id=int(row['user_id']),
-            movie_id=int(row['movie_id']),
-            rating=float(row['rating'])
-        )
-        session.add(rating)
+    catalog = build_catalog()
+    ratings = generate_ratings(catalog)
+    stats = ratings.groupby("movie_id")["rating"].agg(["mean", "count"])
 
-    session.commit()
-    session.close()
+    movies = []
+    for m in catalog.itertuples():
+        mean, count = (stats.loc[m.movie_id] if m.movie_id in stats.index else (None, 0))
+        movies.append({
+            "id": int(m.movie_id),
+            "title": m.title,
+            "genre": m.genre,
+            "year": int(m.year),
+            "rating": round(float(mean), 1) if mean is not None else None,
+            "votes": int(count),
+            "poster_url": poster_url_for(m.title, int(m.year)),
+        })
+    repo.insert_catalog(movies, ratings.to_dict("records"))
+    print(f"Seeded {len(movies)} movies and {len(ratings)} ratings.")
+    return 0
+
 
 if __name__ == "__main__":
-    populate_database()
+    raise SystemExit(main())
