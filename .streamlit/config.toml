@@ -1,0 +1,17 @@
+# Production-safe defaults. Values here apply to `streamlit run app.py`.
+
+[server]
+headless = true
+address = "127.0.0.1"        # only reachable through the reverse proxy (Nginx)
+port = 8501
+enableCORS = true
+enableXsrfProtection = true
+maxUploadSize = 1            # the app accepts no uploads
+
+[client]
+showErrorDetails = "none"    # tracebacks go to the server log, never the browser
+toolbarMode = "viewer"       # hide developer menu items (rerun, clear cache, deploy)
+showErrorLinks = false
+
+[browser]
+gatherUsageStats = false
